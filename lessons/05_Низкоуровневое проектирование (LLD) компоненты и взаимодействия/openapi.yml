@@ -1,0 +1,160 @@
+openapi: 3.0.3
+info:
+  title: TechnoMart — AI Recommendation Service API
+  description: |
+    API для получения персонализированных рекомендаций товаров.
+    Вызывается со стороны Backend (Bitrix) при отображении главной страницы
+    и блока «С этим товаром часто покупают».
+  version: 1.0.0
+  contact:
+    name: AI Architecture Team
+
+servers:
+  - url: https://ai-service.technomart.internal/api/v1
+    description: Внутренний сервер AI Service (Production)
+
+paths:
+  /get_recommendation:
+    get:
+      summary: Получить персонализированные рекомендации для пользователя
+      description: |
+        Возвращает список товаров, отранжированных по вероятности покупки.
+        Для анонимных пользователей используется контекст сессии.
+        При превышении таймаута или недоступности ML-компонентов
+        возвращается fallback-список популярных товаров.
+      operationId: getRecommendation
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          description: Идентификатор авторизованного пользователя. Если не передан — считается анонимным.
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: session_id
+          in: query
+          required: true
+          description: Идентификатор сессии (cookie) для персонализации анонимных пользователей.
+          schema:
+            type: string
+            example: "sess_abc123xyz"
+        - name: limit
+          in: query
+          required: false
+          description: Максимальное количество рекомендаций.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+            example: 10
+        - name: context_item_id
+          in: query
+          required: false
+          description: ID товара, который пользователь просматривает сейчас (для блока «похожие товары»).
+          schema:
+            type: string
+            example: "SKU-12345"
+      responses:
+        '200':
+          description: Успешный ответ с рекомендациями
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationResponse'
+              example:
+                request_id: "req_789ghi"
+                source: "ml"
+                latency_ms: 45
+                recommendations:
+                  - item_id: "SKU-111"
+                    score: 0.92
+                    reason: "Похожие пользователи покупали этот товар"
+                  - item_id: "SKU-222"
+                    score: 0.87
+                    reason: "Часто покупают вместе с просмотренным товаром"
+        '400':
+          description: Некорректные параметры запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "INVALID_PARAMETER"
+                message: "Параметр 'limit' должен быть от 1 до 50"
+        '500':
+          description: Внутренняя ошибка сервиса (ML-компонент недоступен, таймаут)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "ML_SERVICE_UNAVAILABLE"
+                message: "Сервис ранжирования временно недоступен. Возвращён fallback."
+
+components:
+  schemas:
+    RecommendationResponse:
+      type: object
+      required:
+        - request_id
+        - source
+        - recommendations
+      properties:
+        request_id:
+          type: string
+          description: Уникальный идентификатор запроса для трассировки
+          example: "req_789ghi"
+        source:
+          type: string
+          enum: [ml, cache, fallback]
+          description: |
+            Источник рекомендаций:
+            - ml — рассчитаны ML-моделью
+            - cache — взяты из кэша
+            - fallback — популярные товары (при таймауте или ошибке)
+        latency_ms:
+          type: integer
+          description: Время обработки запроса в миллисекундах
+          example: 45
+        recommendations:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/RecommendationItem'
+    RecommendationItem:
+      type: object
+      required:
+        - item_id
+        - score
+      properties:
+        item_id:
+          type: string
+          description: Идентификатор товара (SKU)
+          example: "SKU-111"
+        score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Вероятность покупки (0–1)
+          example: 0.92
+        reason:
+          type: string
+          description: Краткое обоснование (опционально, для Phase 2)
+          example: "Похожие пользователи покупали этот товар"
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Машиночитаемый код ошибки
+          example: "INVALID_PARAMETER"
+        message:
+          type: string
+          description: Человекочитаемое описание ошибки
+          example: "Параметр 'limit' должен быть от 1 до 50"
